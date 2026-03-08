@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Link, Route, Switch, useLocation } from 'wouter';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowUpDown, Cloud, Lock, LogOut, Send as SendIcon, Settings as SettingsIcon, Shield, ShieldUser, Vault } from 'lucide-preact';
+import { ArrowUpDown, Cloud, Clock3, KeyRound, Lock, LogOut, Send as SendIcon, Settings as SettingsIcon, Shield, ShieldUser } from 'lucide-preact';
 import AuthViews from '@/components/AuthViews';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import ToastHost from '@/components/ToastHost';
@@ -15,6 +15,7 @@ import SecurityDevicesPage from '@/components/SecurityDevicesPage';
 import AdminPage from '@/components/AdminPage';
 import HelpPage from '@/components/HelpPage';
 import ImportPage from '@/components/ImportPage';
+import TotpCodesPage from '@/components/TotpCodesPage';
 import type { ImportAttachmentFile, ImportResultSummary } from '@/components/ImportPage';
 import {
   changeMasterPassword,
@@ -26,6 +27,8 @@ import {
   createAuthedFetch,
   createInvite,
   downloadCipherAttachmentDecrypted,
+  exportAdminBackup,
+  importAdminBackup,
   importCiphers,
   createSend,
   deleteAllInvites,
@@ -108,7 +111,12 @@ function asText(value: unknown): string {
 
 function summarizeImportResult(
   ciphers: Array<Record<string, unknown>>,
-  folderCount: number
+  folderCount: number,
+  attachmentSummary?: {
+    total: number;
+    imported: number;
+    failed: Array<{ fileName: string; reason: string }>;
+  }
 ): ImportResultSummary {
   const typeLabel = (type: number): string => {
     if (type === 1) return t('txt_login');
@@ -135,6 +143,9 @@ function summarizeImportResult(
     totalItems: ciphers.length,
     folderCount: Math.max(0, folderCount),
     typeCounts,
+    attachmentCount: Math.max(0, attachmentSummary?.total || 0),
+    importedAttachmentCount: Math.max(0, attachmentSummary?.imported || 0),
+    failedAttachments: attachmentSummary?.failed || [],
   };
 }
 
@@ -1121,13 +1132,16 @@ export default function App() {
   async function uploadImportedAttachments(
     attachments: ImportAttachmentFile[],
     idMaps: { byIndex: Map<number, string>; bySourceId: Map<string, string> }
-  ): Promise<void> {
-    if (!attachments.length) return;
+  ): Promise<{ total: number; imported: number; failed: Array<{ fileName: string; reason: string }> }> {
+    if (!attachments.length) {
+      return { total: 0, imported: 0, failed: [] };
+    }
     if (!session?.symEncKey || !session?.symMacKey) throw new Error(t('txt_vault_key_unavailable'));
 
     const initialCiphers = (await ciphersQuery.refetch()).data || [];
     const cipherById = new Map(initialCiphers.map((cipher) => [String(cipher.id || ''), cipher]));
-    const unresolved: ImportAttachmentFile[] = [];
+    const failed: Array<{ fileName: string; reason: string }> = [];
+    let imported = 0;
 
     for (const attachment of attachments) {
       const sourceId = String(attachment.sourceCipherId || '').trim();
@@ -1136,7 +1150,10 @@ export default function App() {
       const byIndex = Number.isFinite(sourceIndex) ? idMaps.byIndex.get(sourceIndex) : null;
       const targetCipherId = byId || byIndex || null;
       if (!targetCipherId) {
-        unresolved.push(attachment);
+        failed.push({
+          fileName: String(attachment.fileName || '').trim() || 'attachment.bin',
+          reason: t('txt_import_attachment_target_not_found'),
+        });
         continue;
       }
 
@@ -1144,14 +1161,23 @@ export default function App() {
       const fileBytes = Uint8Array.from(attachment.bytes);
       const file = new File([fileBytes], name, { type: 'application/octet-stream' });
       const cipher = cipherById.get(targetCipherId) || null;
-      await uploadCipherAttachment(authedFetch, session, targetCipherId, file, cipher);
-    }
-
-    if (unresolved.length) {
-      throw new Error(t('txt_failed_to_map_attachments', { count: unresolved.length }));
+      try {
+        await uploadCipherAttachment(authedFetch, session, targetCipherId, file, cipher);
+        imported += 1;
+      } catch (error) {
+        failed.push({
+          fileName: name,
+          reason: error instanceof Error ? error.message : t('txt_upload_attachment_failed'),
+        });
+      }
     }
 
     await ciphersQuery.refetch();
+    return {
+      total: attachments.length,
+      imported,
+      failed,
+    };
   }
 
   function toImportedCipherMapsFromResponse(
@@ -1251,10 +1277,10 @@ export default function App() {
     const idMaps = buildImportedCipherMaps(payload.ciphers, createdCipherIdsByIndex);
     await foldersQuery.refetch();
     await ciphersQuery.refetch();
-    if (attachments.length) {
-      await uploadImportedAttachments(attachments, idMaps);
-    }
-    return summarizeImportResult(payload.ciphers, mode === 'original' ? createdFolderCount : 0);
+    const attachmentSummary = attachments.length
+      ? await uploadImportedAttachments(attachments, idMaps)
+      : undefined;
+    return summarizeImportResult(payload.ciphers, mode === 'original' ? createdFolderCount : 0, attachmentSummary);
   }
 
   async function handleImportEncryptedRawAction(
@@ -1279,11 +1305,14 @@ export default function App() {
       returnCipherMap: attachments.length > 0,
     });
     await Promise.all([ciphersQuery.refetch(), foldersQuery.refetch()]);
-    if (attachments.length) {
-      const idMaps = toImportedCipherMapsFromResponse(importedCipherMap);
-      await uploadImportedAttachments(attachments, idMaps);
-    }
-    return summarizeImportResult(nextPayload.ciphers, mode === 'original' ? nextPayload.folders.length : 0);
+    const attachmentSummary = attachments.length
+      ? await uploadImportedAttachments(attachments, toImportedCipherMapsFromResponse(importedCipherMap))
+      : undefined;
+    return summarizeImportResult(
+      nextPayload.ciphers,
+      mode === 'original' ? nextPayload.folders.length : 0,
+      attachmentSummary
+    );
   }
 
   async function handleExportAction(request: ExportRequest) {
@@ -1518,6 +1547,30 @@ export default function App() {
     throw new Error(t('txt_unsupported_export_format'));
   }
 
+  function downloadBytesAsFile(bytes: Uint8Array, fileName: string, mimeType: string) {
+    const blob = new Blob([bytes], { type: mimeType || 'application/octet-stream' });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = fileName || 'download.bin';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  }
+
+  async function handleBackupExportAction() {
+    const payload = await exportAdminBackup(authedFetch);
+    downloadBytesAsFile(payload.bytes, payload.fileName, payload.mimeType);
+  }
+
+  async function handleBackupImportAction(file: File, replaceExisting: boolean = false) {
+    await importAdminBackup(authedFetch, file, replaceExisting);
+    window.setTimeout(() => {
+      logoutNow();
+    }, 200);
+  }
+
   const hashPathRaw = typeof window !== 'undefined' ? window.location.hash || '' : '';
   const hashPath = hashPathRaw.startsWith('#') ? hashPathRaw.slice(1) : hashPathRaw;
   const hashPathOnly = String(hashPath || '').split('?')[0].split('#')[0];
@@ -1538,6 +1591,12 @@ export default function App() {
       navigate(IMPORT_ROUTE);
     }
   }, [phase, isImportHashRoute, location, navigate]);
+
+  useEffect(() => {
+    if (phase === 'app' && profile?.role !== 'admin' && location === '/help') {
+      navigate('/vault');
+    }
+  }, [phase, profile?.role, location, navigate]);
 
   if (jwtWarning) {
     return <JwtWarningPage reason={jwtWarning.reason} minLength={jwtWarning.minLength} />;
@@ -1669,8 +1728,12 @@ export default function App() {
           <div className="app-main">
             <aside className="app-side">
               <Link href="/vault" className={`side-link ${location === '/vault' ? 'active' : ''}`}>
-                <Vault size={16} />
+                <KeyRound size={16} />
                 <span>{t('nav_my_vault')}</span>
+              </Link>
+              <Link href="/vault/totp" className={`side-link ${location === '/vault/totp' ? 'active' : ''}`}>
+                <Clock3 size={16} />
+                <span>{t('txt_verification_code')}</span>
               </Link>
               <Link href="/sends" className={`side-link ${location === '/sends' ? 'active' : ''}`}>
                 <SendIcon size={16} />
@@ -1690,10 +1753,12 @@ export default function App() {
                 <Shield size={16} />
                 <span>{t('nav_device_management')}</span>
               </Link>
-              <Link href="/help" className={`side-link ${location === '/help' ? 'active' : ''}`}>
-                <Cloud size={16} />
-                <span>{t('nav_backup_strategy')}</span>
-              </Link>
+              {profile?.role === 'admin' && (
+                <Link href="/help" className={`side-link ${location === '/help' ? 'active' : ''}`}>
+                  <Cloud size={16} />
+                  <span>{t('nav_backup_strategy')}</span>
+                </Link>
+              )}
               <Link href={IMPORT_ROUTE} className={`side-link ${isImportRoute ? 'active' : ''}`}>
                 <ArrowUpDown size={14} />
                 <span>{t('nav_import_export')}</span>
@@ -1712,6 +1777,9 @@ export default function App() {
                     onBulkDelete={bulkDeleteSendItems}
                     onNotify={pushToast}
                   />
+                </Route>
+                <Route path="/vault/totp">
+                  <TotpCodesPage ciphers={decryptedCiphers} loading={ciphersQuery.isFetching} onNotify={pushToast} />
                 </Route>
                 <Route path="/vault">
                   <VaultPage
@@ -1905,7 +1973,9 @@ export default function App() {
                   />
                 </Route>
                 <Route path="/help">
-                  <HelpPage />
+                  {profile?.role === 'admin' ? (
+                    <HelpPage onExport={handleBackupExportAction} onImport={handleBackupImportAction} onNotify={pushToast} />
+                  ) : null}
                 </Route>
               </Switch>
             </main>
