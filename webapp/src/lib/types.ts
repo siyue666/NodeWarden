@@ -13,6 +13,8 @@ export interface Profile {
   email: string;
   name: string;
   key: string;
+  privateKey?: string | null;
+  publicKey?: string | null;
   role: 'admin' | 'user';
   [k: string]: unknown;
 }
@@ -262,6 +264,9 @@ export interface WebConfigResponse {
   defaultKdfIterations?: number;
   jwtUnsafeReason?: 'missing' | 'default' | 'too_short' | null;
   jwtSecretMinLength?: number;
+  _icon_service_url?: string;
+  _icon_service_csp?: string;
+  iconServiceUrl?: string;
 }
 
 export interface TokenSuccess {
@@ -278,7 +283,7 @@ export interface TokenError {
 
 export interface ToastMessage {
   id: string;
-  type: 'success' | 'error';
+  type: 'success' | 'error' | 'warning';
   text: string;
 }
 
@@ -304,6 +309,7 @@ export interface AuthorizedDevice {
   type: number;
   creationDate: string | null;
   revisionDate: string | null;
+  online: boolean;
   trusted: boolean;
   trustedTokenCount: number;
   trustedUntil: string | null;
