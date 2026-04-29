@@ -39,3 +39,8 @@ npm-debug.log*
 # package-lock.json
 
 tmp/
+.tmp/
+
+nodewarden.wiki/
+AGENTS.md
+settings.json

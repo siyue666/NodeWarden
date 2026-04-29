@@ -18,8 +18,51 @@ export function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
   return out;
 }
 
-function toBufferSource(bytes: Uint8Array): ArrayBuffer {
+export function toBufferSource(bytes: Uint8Array): ArrayBuffer {
   return new Uint8Array(bytes).buffer;
+}
+
+const hmacSha256KeyCache = new WeakMap<Uint8Array, Promise<CryptoKey>>();
+const aesCbcEncryptKeyCache = new WeakMap<Uint8Array, Promise<CryptoKey>>();
+const aesCbcDecryptKeyCache = new WeakMap<Uint8Array, Promise<CryptoKey>>();
+
+function getCachedCryptoKey(
+  cache: WeakMap<Uint8Array, Promise<CryptoKey>>,
+  keyBytes: Uint8Array,
+  create: () => Promise<CryptoKey>
+): Promise<CryptoKey> {
+  const cached = cache.get(keyBytes);
+  if (cached) return cached;
+  const pending = create().catch((error) => {
+    cache.delete(keyBytes);
+    throw error;
+  });
+  cache.set(keyBytes, pending);
+  return pending;
+}
+
+function getHmacSha256Key(keyBytes: Uint8Array): Promise<CryptoKey> {
+  return getCachedCryptoKey(
+    hmacSha256KeyCache,
+    keyBytes,
+    () => crypto.subtle.importKey('raw', toBufferSource(keyBytes), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  );
+}
+
+function getAesCbcEncryptKey(keyBytes: Uint8Array): Promise<CryptoKey> {
+  return getCachedCryptoKey(
+    aesCbcEncryptKeyCache,
+    keyBytes,
+    () => crypto.subtle.importKey('raw', toBufferSource(keyBytes), { name: 'AES-CBC' }, false, ['encrypt'])
+  );
+}
+
+function getAesCbcDecryptKey(keyBytes: Uint8Array): Promise<CryptoKey> {
+  return getCachedCryptoKey(
+    aesCbcDecryptKeyCache,
+    keyBytes,
+    () => crypto.subtle.importKey('raw', toBufferSource(keyBytes), { name: 'AES-CBC' }, false, ['decrypt'])
+  );
 }
 
 function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
@@ -91,17 +134,17 @@ export async function hkdf(
 }
 
 async function hmacSha256(keyBytes: Uint8Array, dataBytes: Uint8Array): Promise<Uint8Array> {
-  const key = await crypto.subtle.importKey('raw', toBufferSource(keyBytes), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const key = await getHmacSha256Key(keyBytes);
   return new Uint8Array(await crypto.subtle.sign('HMAC', key, toBufferSource(dataBytes)));
 }
 
 async function encryptAesCbc(data: Uint8Array, key: Uint8Array, iv: Uint8Array): Promise<Uint8Array> {
-  const cryptoKey = await crypto.subtle.importKey('raw', toBufferSource(key), { name: 'AES-CBC' }, false, ['encrypt']);
+  const cryptoKey = await getAesCbcEncryptKey(key);
   return new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv: toBufferSource(iv) }, cryptoKey, toBufferSource(data)));
 }
 
 async function decryptAesCbc(data: Uint8Array, key: Uint8Array, iv: Uint8Array): Promise<Uint8Array> {
-  const cryptoKey = await crypto.subtle.importKey('raw', toBufferSource(key), { name: 'AES-CBC' }, false, ['decrypt']);
+  const cryptoKey = await getAesCbcDecryptKey(key);
   return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-CBC', iv: toBufferSource(iv) }, cryptoKey, toBufferSource(data)));
 }
 
@@ -167,19 +210,44 @@ export async function decryptStr(cipherString: string | null | undefined, encKey
   return new TextDecoder().decode(plain);
 }
 
-export function extractTotpSecret(raw: string): string {
-  if (!raw) return '';
+function normalizeTotpSecret(secret: string): string {
+  return secret.toUpperCase().replace(/[\s-]/g, '').replace(/=+$/g, '');
+}
+
+function parseSteamSecret(raw: string): string {
+  const match = raw.trim().match(/^steam:\/\/([^/?#]+)(?:[/?#].*)?$/i);
+  if (!match?.[1]) return '';
+  try {
+    return normalizeTotpSecret(decodeURIComponent(match[1]));
+  } catch {
+    return normalizeTotpSecret(match[1]);
+  }
+}
+
+function parseTotpConfig(raw: string): { secret: string; steam: boolean } {
+  if (!raw) return { secret: '', steam: false };
   const s = raw.trim();
-  if (!s) return '';
+  if (!s) return { secret: '', steam: false };
+  if (/^steam:\/\//i.test(s)) {
+    return { secret: parseSteamSecret(s), steam: true };
+  }
   if (/^otpauth:\/\//i.test(s)) {
     try {
       const u = new URL(s);
-      return (u.searchParams.get('secret') || '').toUpperCase().replace(/[\s-]/g, '').replace(/=+$/g, '');
+      const label = decodeURIComponent((u.pathname || '').replace(/^\/+/, '')).toLowerCase();
+      const issuer = (u.searchParams.get('issuer') || '').trim().toLowerCase();
+      const algorithm = (u.searchParams.get('algorithm') || '').trim().toLowerCase();
+      const steam = issuer === 'steam' || label.startsWith('steam:') || algorithm === 'steam';
+      return { secret: normalizeTotpSecret(u.searchParams.get('secret') || ''), steam };
     } catch {
-      return '';
+      return { secret: '', steam: false };
     }
   }
-  return s.toUpperCase().replace(/[\s-]/g, '').replace(/=+$/g, '');
+  return { secret: normalizeTotpSecret(s), steam: false };
+}
+
+export function extractTotpSecret(raw: string): string {
+  return parseTotpConfig(raw).secret;
 }
 
 function base32ToBytes(input: string): Uint8Array {
@@ -202,7 +270,7 @@ function base32ToBytes(input: string): Uint8Array {
 }
 
 export async function calcTotpNow(rawSecret: string): Promise<{ code: string; remain: number } | null> {
-  const secret = extractTotpSecret(rawSecret);
+  const { secret, steam } = parseTotpConfig(rawSecret);
   if (!secret) return null;
   const keyBytes = base32ToBytes(secret);
   if (!keyBytes.length) return null;
@@ -221,6 +289,15 @@ export async function calcTotpNow(rawSecret: string): Promise<{ code: string; re
   const hs = new Uint8Array(await crypto.subtle.sign('HMAC', key, toBufferSource(message)));
   const offset = hs[hs.length - 1] & 0x0f;
   const bin = ((hs[offset] & 0x7f) << 24) | ((hs[offset + 1] & 0xff) << 16) | ((hs[offset + 2] & 0xff) << 8) | (hs[offset + 3] & 0xff);
-  const code = (bin % 1000000).toString().padStart(6, '0');
+  let code = (bin % 1000000).toString().padStart(6, '0');
+  if (steam) {
+    const chars = '23456789BCDFGHJKMNPQRTVWXY';
+    let value = bin;
+    code = '';
+    for (let i = 0; i < 5; i += 1) {
+      code += chars[value % chars.length];
+      value = Math.floor(value / chars.length);
+    }
+  }
   return { code, remain };
 }

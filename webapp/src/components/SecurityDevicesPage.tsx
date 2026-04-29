@@ -1,4 +1,6 @@
-import { Clock3, RefreshCw, ShieldOff, Trash2 } from 'lucide-preact';
+import { useState } from 'preact/hooks';
+import { Clock3, Pencil, RefreshCw, ShieldOff, Trash2 } from 'lucide-preact';
+import ConfirmDialog from '@/components/ConfirmDialog';
 import type { AuthorizedDevice } from '@/lib/types';
 import { t } from '@/lib/i18n';
 
@@ -6,9 +8,11 @@ interface SecurityDevicesPageProps {
   devices: AuthorizedDevice[];
   loading: boolean;
   onRefresh: () => void;
+  onRenameDevice: (device: AuthorizedDevice, name: string) => Promise<void>;
   onRevokeTrust: (device: AuthorizedDevice) => void;
   onRemoveDevice: (device: AuthorizedDevice) => void;
   onRevokeAll: () => void;
+  onRemoveAll: () => void;
 }
 
 function formatDateTime(value: string | null | undefined): string {
@@ -40,14 +44,31 @@ function mapDeviceTypeName(type: number): string {
 }
 
 export default function SecurityDevicesPage(props: SecurityDevicesPageProps) {
+  const [editingDevice, setEditingDevice] = useState<AuthorizedDevice | null>(null);
+  const [deviceNote, setDeviceNote] = useState('');
+  const [savingNote, setSavingNote] = useState(false);
+
+  async function handleSaveDeviceNote(): Promise<void> {
+    if (!editingDevice || savingNote) return;
+    setSavingNote(true);
+    try {
+      await props.onRenameDevice(editingDevice, deviceNote);
+      setEditingDevice(null);
+      setDeviceNote('');
+    } finally {
+      setSavingNote(false);
+    }
+  }
+
   return (
-    <div className="stack">
-      <section className="card">
+    <>
+      <div className="stack">
+        <section className="card">
         <div className="section-head">
           <div>
-            <h3 style={{ margin: 0 }}>{t('txt_device_management')}</h3>
-            <div className="muted-inline" style={{ marginTop: 4 }}>
-              {t('txt_manage_authorized_devices_and_30_day_totp_trusted_sessions')}
+            <h3 className="flush-title">{t('txt_device_management')}</h3>
+            <div className="muted-inline section-note">
+              {t('txt_manage_device_sessions_and_30_day_totp_trusted_sessions')}
             </div>
           </div>
           <div className="actions">
@@ -59,17 +80,22 @@ export default function SecurityDevicesPage(props: SecurityDevicesPageProps) {
               <ShieldOff size={14} className="btn-icon" />
               {t('txt_revoke_all_trusted')}
             </button>
+            <button type="button" className="btn btn-danger small" onClick={props.onRemoveAll}>
+              <Trash2 size={14} className="btn-icon" />
+              {t('txt_remove_all_devices')}
+            </button>
           </div>
         </div>
-      </section>
+        </section>
 
-      <section className="card">
-        <h3 style={{ marginTop: 0 }}>{t('txt_authorized_devices')}</h3>
+        <section className="card">
+        <h3 className="section-title-flush">{t('txt_authorized_devices')}</h3>
         <table className="table">
           <thead>
             <tr>
               <th>{t('txt_device')}</th>
               <th>{t('txt_type')}</th>
+              <th>{t('txt_status')}</th>
               <th>{t('txt_added')}</th>
               <th>{t('txt_last_seen')}</th>
               <th>{t('txt_trusted_until')}</th>
@@ -79,14 +105,22 @@ export default function SecurityDevicesPage(props: SecurityDevicesPageProps) {
           <tbody>
             {props.devices.map((device) => (
               <tr key={device.identifier}>
-                <td>
+                <td data-label={t('txt_device')}>
                   <div>{device.name || t('txt_unknown_device')}</div>
+                  {!!device.deviceNote && !!device.systemName && device.systemName !== device.name && (
+                    <div className="muted-inline">{device.systemName}</div>
+                  )}
                   <div className="muted-inline">{device.identifier}</div>
                 </td>
-                <td>{mapDeviceTypeName(device.type)}</td>
-                <td>{formatDateTime(device.creationDate)}</td>
-                <td>{formatDateTime(device.revisionDate)}</td>
-                <td>
+                <td data-label={t('txt_type')}>{mapDeviceTypeName(device.type)}</td>
+                <td data-label={t('txt_status')}>
+                  <span className={`device-status-pill ${device.online ? 'online' : 'offline'}`}>
+                    {device.online ? t('txt_online') : t('txt_offline')}
+                  </span>
+                </td>
+                <td data-label={t('txt_added')}>{formatDateTime(device.creationDate)}</td>
+                <td data-label={t('txt_last_seen')}>{formatDateTime(device.lastSeenAt || device.revisionDate)}</td>
+                <td data-label={t('txt_trusted_until')}>
                   {device.trusted ? (
                     <div className="trusted-cell">
                       <Clock3 size={13} />
@@ -96,7 +130,7 @@ export default function SecurityDevicesPage(props: SecurityDevicesPageProps) {
                     <span className="muted-inline">{t('txt_not_trusted')}</span>
                   )}
                 </td>
-                <td>
+                <td data-label={t('txt_actions')}>
                   <div className="actions">
                     <button
                       type="button"
@@ -105,11 +139,28 @@ export default function SecurityDevicesPage(props: SecurityDevicesPageProps) {
                       onClick={() => props.onRevokeTrust(device)}
                     >
                       <ShieldOff size={14} className="btn-icon" />
-                      {t('txt_revoke_trust')}
+                      {t('txt_untrust')}
                     </button>
-                    <button type="button" className="btn btn-danger small" onClick={() => props.onRemoveDevice(device)}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary small"
+                      disabled={device.hasStoredDevice === false}
+                      onClick={() => {
+                        setEditingDevice(device);
+                        setDeviceNote(device.deviceNote || device.name || '');
+                      }}
+                    >
+                      <Pencil size={14} className="btn-icon" />
+                      {t('txt_device_note')}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-danger small"
+                      disabled={device.hasStoredDevice === false}
+                      onClick={() => props.onRemoveDevice(device)}
+                    >
                       <Trash2 size={14} className="btn-icon" />
-                      {t('txt_remove_device_2')}
+                      {t('txt_delete')}
                     </button>
                   </div>
                 </td>
@@ -117,14 +168,42 @@ export default function SecurityDevicesPage(props: SecurityDevicesPageProps) {
             ))}
             {!props.loading && props.devices.length === 0 && (
               <tr>
-                <td colSpan={6}>
-                  <div className="empty" style={{ minHeight: 80 }}>{t('txt_no_devices_found')}</div>
+                <td colSpan={7}>
+                  <div className="empty empty-comfortable">{t('txt_no_devices_found')}</div>
                 </td>
               </tr>
             )}
           </tbody>
         </table>
-      </section>
-    </div>
+        </section>
+      </div>
+
+      <ConfirmDialog
+        open={!!editingDevice}
+        title={t('txt_device_note')}
+        message={t('txt_replace_device_name_with_note')}
+        confirmText={t('txt_save')}
+        cancelText={t('txt_cancel')}
+        showIcon={false}
+        confirmDisabled={savingNote}
+        cancelDisabled={savingNote}
+        onConfirm={() => void handleSaveDeviceNote()}
+        onCancel={() => {
+          if (savingNote) return;
+          setEditingDevice(null);
+          setDeviceNote('');
+        }}
+      >
+        <label className="field">
+          <span>{t('txt_device_note')}</span>
+          <input
+            className="input"
+            maxLength={128}
+            value={deviceNote}
+            onInput={(e) => setDeviceNote((e.currentTarget as HTMLInputElement).value)}
+          />
+        </label>
+      </ConfirmDialog>
+    </>
   );
 }
