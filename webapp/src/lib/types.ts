@@ -1,9 +1,10 @@
-export type AppPhase = 'loading' | 'register' | 'login' | 'locked' | 'app';
+export type AppPhase = 'register' | 'login' | 'locked' | 'app';
 
 export interface SessionState {
-  accessToken: string;
-  refreshToken: string;
+  accessToken?: string;
+  refreshToken?: string;
   email: string;
+  authMode?: 'token' | 'web-cookie';
   symEncKey?: string;
   symMacKey?: string;
 }
@@ -13,6 +14,9 @@ export interface Profile {
   email: string;
   name: string;
   key: string;
+  masterPasswordHint?: string | null;
+  privateKey?: string | null;
+  publicKey?: string | null;
   role: 'admin' | 'user';
   [k: string]: unknown;
 }
@@ -21,11 +25,24 @@ export interface Folder {
   id: string;
   name: string;
   decName?: string;
+  revisionDate?: string;
+  creationDate?: string;
 }
 
 export interface CipherLoginUri {
   uri?: string | null;
+  uriChecksum?: string | null;
+  match?: number | null;
+  response?: unknown | null;
   decUri?: string;
+  [key: string]: unknown;
+}
+
+export interface VaultDraftLoginUri {
+  uri: string;
+  match: number | null;
+  originalUri?: string;
+  extra?: Record<string, unknown>;
 }
 
 export interface CipherAttachment {
@@ -50,9 +67,14 @@ export interface CipherLogin {
   totp?: string | null;
   uris?: CipherLoginUri[] | null;
   fido2Credentials?: CipherLoginPasskey[] | null;
+  autofillOnPageLoad?: boolean | null;
+  uri?: string | null;
+  passwordRevisionDate?: string | null;
+  response?: unknown | null;
   decUsername?: string;
   decPassword?: string;
   decTotp?: string;
+  [key: string]: unknown;
 }
 
 export interface CipherCard {
@@ -128,6 +150,12 @@ export interface CipherField {
   decValue?: string;
 }
 
+export interface CipherPasswordHistoryEntry {
+  password?: string | null;
+  lastUsedDate?: string | null;
+  decPassword?: string;
+}
+
 export interface Cipher {
   id: string;
   type: number;
@@ -140,13 +168,14 @@ export interface Cipher {
   creationDate?: string;
   revisionDate?: string;
   deletedDate?: string | null;
+  archivedDate?: string | null;
   attachments?: CipherAttachment[] | null;
   login?: CipherLogin | null;
   card?: CipherCard | null;
   identity?: CipherIdentity | null;
   sshKey?: CipherSshKey | null;
   secureNote?: { type?: number | null } | null;
-  passwordHistory?: Array<{ password?: string | null; lastUsedDate?: string | null }> | null;
+  passwordHistory?: CipherPasswordHistoryEntry[] | null;
   fields?: CipherField[] | null;
   decName?: string;
   decNotes?: string;
@@ -217,7 +246,7 @@ export interface VaultDraft {
   loginUsername: string;
   loginPassword: string;
   loginTotp: string;
-  loginUris: string[];
+  loginUris: VaultDraftLoginUri[];
   loginFido2Credentials: Array<Record<string, unknown>>;
   cardholderName: string;
   cardNumber: string;
@@ -254,11 +283,7 @@ export interface ListResponse<T> {
   data: T[];
 }
 
-export interface SetupStatusResponse {
-  registered: boolean;
-}
-
-export interface WebConfigResponse {
+export interface WebBootstrapResponse {
   defaultKdfIterations?: number;
   jwtUnsafeReason?: 'missing' | 'default' | 'too_short' | null;
   jwtSecretMinLength?: number;
@@ -266,8 +291,29 @@ export interface WebConfigResponse {
 
 export interface TokenSuccess {
   access_token: string;
-  refresh_token: string;
+  refresh_token?: string;
+  web_session?: boolean;
+  expires_in?: number;
+  token_type?: string;
   TwoFactorToken?: string;
+  Key?: string;
+  PrivateKey?: string | null;
+  AccountKeys?: unknown | null;
+  accountKeys?: unknown | null;
+  Kdf?: number;
+  KdfIterations?: number;
+  KdfMemory?: number | null;
+  KdfParallelism?: number | null;
+  ForcePasswordReset?: boolean;
+  ResetMasterPassword?: boolean;
+  scope?: string;
+  unofficialServer?: boolean;
+  UserDecryptionOptions?: unknown;
+  userDecryptionOptions?: unknown;
+  VaultKeys?: {
+    symEncKey?: string;
+    symMacKey?: string;
+  };
 }
 
 export interface TokenError {
@@ -278,7 +324,7 @@ export interface TokenError {
 
 export interface ToastMessage {
   id: string;
-  type: 'success' | 'error';
+  type: 'success' | 'error' | 'warning';
   text: string;
 }
 
@@ -300,11 +346,35 @@ export interface AdminInvite {
 export interface AuthorizedDevice {
   id: string;
   name: string;
+  systemName?: string | null;
+  deviceNote?: string | null;
   identifier: string;
   type: number;
   creationDate: string | null;
   revisionDate: string | null;
+  lastSeenAt?: string | null;
+  hasStoredDevice?: boolean;
+  online: boolean;
   trusted: boolean;
   trustedTokenCount: number;
   trustedUntil: string | null;
+}
+
+export interface GlobalEquivalentDomain {
+  type: number;
+  domains: string[];
+  excluded: boolean;
+}
+
+export interface CustomEquivalentDomain {
+  id: string;
+  domains: string[];
+  excluded: boolean;
+}
+
+export interface DomainRules {
+  equivalentDomains: string[][];
+  customEquivalentDomains: CustomEquivalentDomain[];
+  globalEquivalentDomains: GlobalEquivalentDomain[];
+  object: 'domains';
 }

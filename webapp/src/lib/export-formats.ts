@@ -1,7 +1,7 @@
 import { argon2idAsync } from '@noble/hashes/argon2.js';
 import { strToU8, zipSync } from 'fflate';
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader, ZipWriter, configure as configureZipJs } from '@zip.js/zip.js';
-import type { PreloginKdfConfig } from './api';
+import type { PreloginKdfConfig } from './api/auth';
 import { base64ToBytes, bytesToBase64, decryptBw, decryptStr, encryptBw, hkdfExpand, pbkdf2 } from './crypto';
 import type { Cipher, Folder } from './types';
 
@@ -110,10 +110,6 @@ function randomGuid(): string {
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-function toAesBuffer(bytes: Uint8Array): ArrayBuffer {
-  return new Uint8Array(bytes).buffer;
 }
 
 async function getCipherKeyParts(cipher: Cipher, userEnc: Uint8Array, userMac: Uint8Array): Promise<{ enc: Uint8Array; mac: Uint8Array }> {
@@ -297,7 +293,9 @@ async function mapCipherPlain(cipher: Cipher, userEnc: Uint8Array, userMac: Uint
           )
         : [],
       fido2Credentials: Array.isArray(cipher.login.fido2Credentials)
-        ? await Promise.all(cipher.login.fido2Credentials.map((credential) => deepDecryptUnknown(credential, keyParts.enc, keyParts.mac)))
+        ? await Promise.all(
+            cipher.login.fido2Credentials.map((credential) => deepDecryptUnknown(credential, keyParts.enc, keyParts.mac))
+          )
         : [],
     };
   } else {
@@ -380,85 +378,6 @@ export async function buildPlainBitwardenJsonDocument(args: BuildPlainJsonArgs):
 export async function buildPlainBitwardenJsonString(args: BuildPlainJsonArgs): Promise<string> {
   const doc = await buildPlainBitwardenJsonDocument(args);
   return JSON.stringify(doc, null, 2);
-}
-
-export async function buildBitwardenCsvString(args: BuildPlainJsonArgs): Promise<string> {
-  const doc = await buildPlainBitwardenJsonDocument(args);
-  const folders = Array.isArray(doc.folders) ? (doc.folders as Array<Record<string, unknown>>) : [];
-  const items = Array.isArray(doc.items) ? (doc.items as Array<Record<string, unknown>>) : [];
-
-  const folderNameById = new Map<string, string>();
-  for (const folder of folders) {
-    const id = normalizeString(folder.id);
-    if (!id) continue;
-    folderNameById.set(id, normalizeString(folder.name) || '');
-  }
-
-  const header = [
-    'folder',
-    'favorite',
-    'type',
-    'name',
-    'notes',
-    'fields',
-    'reprompt',
-    'archivedDate',
-    'login_uri',
-    'login_username',
-    'login_password',
-    'login_totp',
-  ];
-
-  const rows: string[][] = [header];
-  for (const item of items) {
-    const type = normalizeNumber(item.type, 1);
-    if (type !== 1 && type !== 2) continue;
-    const folderId = normalizeString(item.folderId);
-    const folderName = folderId ? folderNameById.get(folderId) || '' : '';
-    const fields = Array.isArray(item.fields)
-      ? (item.fields as Array<Record<string, unknown>>)
-          .map((field) => {
-            const name = normalizeString(field.name) || '';
-            const value = normalizeString(field.value) || '';
-            if (!name && !value) return '';
-            return `${name}: ${value}`;
-          })
-          .filter((line) => !!line)
-          .join('\n')
-      : '';
-
-    const login = isRecord(item.login) ? (item.login as Record<string, unknown>) : null;
-    const loginUris = login && Array.isArray(login.uris)
-      ? (login.uris as Array<Record<string, unknown>>)
-          .map((uri) => normalizeString(uri.uri) || '')
-          .filter((uri) => !!uri)
-          .join(',')
-      : '';
-
-    rows.push([
-      folderName,
-      item.favorite ? '1' : '',
-      type === 1 ? 'login' : 'note',
-      normalizeString(item.name) || '',
-      normalizeString(item.notes) || '',
-      fields,
-      String(normalizeNumber(item.reprompt, 0)),
-      normalizeString(item.archivedDate) || '',
-      loginUris,
-      normalizeString(login?.username) || '',
-      normalizeString(login?.password) || '',
-      normalizeString(login?.totp) || '',
-    ]);
-  }
-
-  const escapeCsv = (value: string): string => {
-    if (/[",\n\r]/.test(value)) {
-      return `"${value.replace(/"/g, '""')}"`;
-    }
-    return value;
-  };
-
-  return rows.map((row) => row.map((cell) => escapeCsv(String(cell || ''))).join(',')).join('\n');
 }
 
 export async function buildAccountEncryptedBitwardenJsonString(args: BuildEncryptedJsonArgs): Promise<string> {

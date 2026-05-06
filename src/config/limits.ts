@@ -24,6 +24,9 @@
     // Default PBKDF2 iterations for account creation/prelogin fallback.
     // 账户创建与预登录回退使用的默认 PBKDF2 迭代次数。
     defaultKdfIterations: 600000,
+    // clientSecret length
+    // clientSecret 长度
+    clientSecretLength: 30,
   },
   rateLimit: {
     // Max failed login attempts before temporary lock.
@@ -44,6 +47,12 @@
     // Sensitive public/auth request budget per IP per minute.
     // 敏感公开/认证接口每 IP 每分钟请求配额。
     sensitivePublicRequestsPerMinute: 30,
+    // Password hint lookup budget per IP per minute.
+    // 密码提示查询接口每 IP 每分钟请求配额。
+    passwordHintRequestsPerMinute: 1,
+    // Password hint lookup budget per IP per hour.
+    // 密码提示查询接口每 IP 每小时请求配额。
+    passwordHintRequestsPerHour: 3,
     // Register endpoint budget per IP per minute.
     // 注册接口每 IP 每分钟请求配额。
     registerRequestsPerMinute: 5,
@@ -107,6 +116,12 @@
     // In-memory /api/sync response cache TTL (milliseconds).
     // /api/sync 内存缓存有效期（毫秒）。
     syncResponseTtlMs: 30 * 1000,
+    // Max size of a single cached /api/sync body in bytes.
+    // 单个 /api/sync 缓存响应允许的最大字节数。
+    syncResponseMaxBodyBytes: 512 * 1024,
+    // Max total in-memory bytes used by /api/sync cache per isolate.
+    // 每个 isolate 中 /api/sync 缓存允许占用的最大总字节数。
+    syncResponseMaxTotalBytes: 2 * 1024 * 1024,
     // Max in-memory /api/sync cache entries per isolate.
     // 每个 isolate 的 /api/sync 最大缓存条目数。
     syncResponseMaxEntries: 64,
@@ -118,6 +133,9 @@
     // Max total items (folders + ciphers) allowed in a single import.
     // 单次导入允许的最大条目数（文件夹 + 密码项合计）。
     importItemLimit: 5000,
+    // Small fixed concurrency for blob/attachment batch cleanup work.
+    // 附件 / blob 批量清理时的保守并发数。
+    attachmentDeleteConcurrency: 4,
   },
   request: {
     // Hard body size limit for JSON API endpoints (bytes). File upload paths are exempt.

@@ -1,5 +1,7 @@
 import { useState } from 'preact/hooks';
 import { ChevronLeft, ChevronRight, Clipboard, Plus, RefreshCw, Trash2, UserCheck, UserX } from 'lucide-preact';
+import { copyTextToClipboard } from '@/lib/clipboard';
+import LoadingState from '@/components/LoadingState';
 import type { AdminInvite, AdminUser } from '@/lib/types';
 import { t } from '@/lib/i18n';
 
@@ -7,10 +9,12 @@ interface AdminPageProps {
   currentUserId: string;
   users: AdminUser[];
   invites: AdminInvite[];
+  loading: boolean;
+  error: string;
   onRefresh: () => void;
   onCreateInvite: (hours: number) => Promise<void>;
   onDeleteAllInvites: () => Promise<void>;
-  onToggleUserStatus: (userId: string, currentStatus: string) => Promise<void>;
+  onToggleUserStatus: (userId: string, currentStatus: 'active' | 'banned') => Promise<void>;
   onDeleteUser: (userId: string) => Promise<void>;
   onRevokeInvite: (code: string) => Promise<void>;
 }
@@ -39,10 +43,30 @@ export default function AdminPage(props: AdminPageProps) {
     return status || '-';
   };
 
+  const normalizeToggleableStatus = (status: string): 'active' | 'banned' | null => {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized === 'active' || normalized === 'banned') return normalized;
+    return null;
+  };
+
   return (
     <div className="stack">
+      {!!props.error && (
+        <div className="local-error">
+          <span>{props.error}</span>
+          <button type="button" className="btn btn-secondary small" onClick={props.onRefresh}>
+            <RefreshCw size={14} className="btn-icon" />
+            {t('txt_refresh')}
+          </button>
+        </div>
+      )}
       <section className="card">
-        <h3>{t('txt_users')}</h3>
+        <div className="section-head">
+          <h3>{t('txt_users')}</h3>
+          <button type="button" className="btn btn-secondary small" disabled={props.loading} onClick={props.onRefresh}>
+            <RefreshCw size={14} className="btn-icon" /> {t('txt_refresh')}
+          </button>
+        </div>
         <table className="table">
           <thead>
             <tr>
@@ -54,19 +78,24 @@ export default function AdminPage(props: AdminPageProps) {
             </tr>
           </thead>
           <tbody>
-            {props.users.map((user) => (
-              <tr key={user.id}>
-                <td>{user.email}</td>
-                <td>{user.name || t('txt_dash')}</td>
-                <td>{roleText(user.role)}</td>
-                <td>{statusText(user.status)}</td>
-                <td>
+            {props.users.map((user) => {
+              const toggleableStatus = normalizeToggleableStatus(user.status);
+              return (
+                <tr key={user.id}>
+                <td data-label={t('txt_email')}>{user.email}</td>
+                <td data-label={t('txt_name')}>{user.name || t('txt_dash')}</td>
+                <td data-label={t('txt_role')}>{roleText(user.role)}</td>
+                <td data-label={t('txt_status')}>{statusText(user.status)}</td>
+                <td data-label={t('txt_actions')}>
                   <div className="actions">
                     <button
                       type="button"
                       className="btn btn-secondary"
-                      disabled={user.id === props.currentUserId}
-                      onClick={() => void props.onToggleUserStatus(user.id, user.status)}
+                      disabled={user.id === props.currentUserId || !toggleableStatus}
+                      onClick={() => {
+                        if (!toggleableStatus) return;
+                        void props.onToggleUserStatus(user.id, toggleableStatus);
+                      }}
                     >
                       {user.status === 'active' ? <UserX size={14} className="btn-icon" /> : <UserCheck size={14} className="btn-icon" />}
                       {user.status === 'active' ? t('txt_ban') : t('txt_unban')}
@@ -79,8 +108,23 @@ export default function AdminPage(props: AdminPageProps) {
                     )}
                   </div>
                 </td>
+                </tr>
+              );
+            })}
+            {props.loading && !props.users.length && (
+              <tr>
+                <td colSpan={5}>
+                  <LoadingState lines={4} compact />
+                </td>
               </tr>
-            ))}
+            )}
+            {!props.loading && !props.users.length && (
+              <tr>
+                <td colSpan={5}>
+                  <div className="empty empty-comfortable">{t('txt_no_users_found')}</div>
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </section>
@@ -88,7 +132,7 @@ export default function AdminPage(props: AdminPageProps) {
       <section className="card">
         <div className="section-head">
           <h3>{t('txt_invites')}</h3>
-          <button type="button" className="btn btn-secondary" onClick={props.onRefresh}>
+          <button type="button" className="btn btn-secondary" disabled={props.loading} onClick={props.onRefresh}>
             <RefreshCw size={14} className="btn-icon" /> {t('txt_sync')}
           </button>
         </div>
@@ -126,15 +170,15 @@ export default function AdminPage(props: AdminPageProps) {
           <tbody>
             {pagedInvites.map((invite) => (
               <tr key={invite.code}>
-                <td>{invite.code}</td>
-                <td>{statusText(invite.status)}</td>
-                <td>{formatExpiresAt(invite.expiresAt)}</td>
-                <td>
+                <td data-label={t('txt_code')}>{invite.code}</td>
+                <td data-label={t('txt_status')}>{statusText(invite.status)}</td>
+                <td data-label={t('txt_expires_at')}>{formatExpiresAt(invite.expiresAt)}</td>
+                <td data-label={t('txt_actions')}>
                   <div className="actions invite-row-actions">
                     <button
                       type="button"
                       className="btn btn-secondary"
-                      onClick={() => navigator.clipboard.writeText(invite.inviteLink || '')}
+                      onClick={() => void copyTextToClipboard(invite.inviteLink || '', { successMessage: t('txt_link_copied') })}
                     >
                       <Clipboard size={14} className="btn-icon" /> {t('txt_copy_link')}
                     </button>
@@ -147,6 +191,20 @@ export default function AdminPage(props: AdminPageProps) {
                 </td>
               </tr>
             ))}
+            {props.loading && !props.invites.length && (
+              <tr>
+                <td colSpan={4}>
+                  <LoadingState lines={4} compact />
+                </td>
+              </tr>
+            )}
+            {!props.loading && !props.invites.length && (
+              <tr>
+                <td colSpan={4}>
+                  <div className="empty empty-comfortable">{t('txt_no_invites_found')}</div>
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
         <div className="actions">
